@@ -1,5 +1,5 @@
 module meta-explode
-imports libstratego-lib signatures/Stratego-Amb signatures/Stratego-MetaTransition
+imports libstratego-lib signatures/Stratego-Amb signatures/Stratego-MetaTransition gradual-types/utils
 signature
   constructors
     AsFix        : Option
@@ -8,6 +8,7 @@ signature
     cf           : Term                     -> Term
     opt          : Term                     -> Term
     layout       : Term
+    Foo : Term
 
     ConsAux      : a * List(a) -> List(a)
 
@@ -62,41 +63,52 @@ strategies
     else
       MetaExplode
     end
-      
+
   MetaExplode =
-    alltd(
-       Anno(?ToTerm(<pretrm-explode>), MetaExplode)
-     + AnnoList(?ToTerm(<pretrm-explode>), MetaExplode)
-     + NoAnnoList(?ToTerm(<pretrm-explode>))
-     + ?ToTerm(<trm-explode>)
-     + ?ToMetaExpr(<trm-explode>)
-     + ?ToMetaListExpr(<trm-explode>)
-     + ?ToBuild(<!Build(<trm-explode>)>)
-     + ?ToStrategy(<str-explode>)
-   )
+    otf(alltd(MetaExplode'))
+
+  MetaExplode' = Anno(ToTermPreTrmExplode, MetaExplode)
+  MetaExplode' = AnnoList(ToTermPreTrmExplode, MetaExplode)
+  MetaExplode' = NoAnnoList(ToTermPreTrmExplode)
+  MetaExplode' : o@ToTerm(t) -> <otf(<trm-explode> t)> o
+  MetaExplode' : o@c#([t]) -> <otf(<trm-explode> t)> o
+    where <string-starts-with(|"StrategoToTerm")> c
+  MetaExplode' : o@ToMetaExpr(e) -> <otf(<trm-explode> e)> o
+  MetaExplode' : o@c#([t]) -> <otf(<trm-explode> t)> o
+    where <string-starts-with(|"StrategoToMetaExpr")> c
+  MetaExplode' : o@ToMetaListExpr(e) -> <otf(<trm-explode> e)> o
+  MetaExplode' : o@ToBuild(t) -> <otf(!Build(<trm-explode> t))> o
+  MetaExplode' : o@ToStrategy(s) -> <otf(<str-explode> s)> o
+
+  ToTermPreTrmExplode : o@ToTerm(t) -> <otf(<pretrm-explode> t)> o
+  ToTermPreTrmExplode : o@c#([t]) -> <otf(<pretrm-explode> t)> o
+    where <string-starts-with(|"StrategoToTerm")> c
 
   trm-explode =
-    ToTermToTerm
+    otf(
+       ToTermToTerm
     <+ TrmMetaVar 
     <+ LstMetaVar 
     <+ TrmFromTerm 
     <+ TrmFromApp
     <+ TrmFromStr 
     <+ TrmAnno
-    <+ ConcAssocR; trm-explode
-    <+ ConcCons; trm-explode
-    <+ ConcNil; trm-explode
-    <+ !NoAnnoList(<
+    <+ otf(ConcAssocR); trm-explode
+    <+ otf(ConcCons); trm-explode
+    <+ otf(ConcNil); trm-explode
+    <+ !NoAnnoList(<otf(
           TrmInt 
           <+ TrmStr 
-	  <+ TrmConc 
-	  <+ TrmNil 
-	  <+ TrmCons 
-	  <+ TrmOp
-        >)
+          <+ TrmConc 
+          <+ TrmNil 
+          <+ TrmCons 
+          <+ TrmOp
+        )>)
+    )
 
   pretrm-explode = 
-    ToTermToTerm
+    otf(
+       ToTermToTerm
     <+ TrmMetaVar 
     <+ LstMetaVar 
     <+ TrmInt 
@@ -105,13 +117,14 @@ strategies
     <+ TrmFromApp
     <+ TrmFromStr 
     <+ TrmAnno; fatal-err(|"anno in anno")
-    <+ ConcAssocR; pretrm-explode
-    <+ ConcCons; pretrm-explode
-    <+ ConcNil; pretrm-explode
+    <+ otf(ConcAssocR); pretrm-explode
+    <+ otf(ConcCons); pretrm-explode
+    <+ otf(ConcNil); pretrm-explode
     <+ TrmConc
     <+ TrmNil 
     <+ TrmCons 
     <+ TrmOp
+    )
 
 // match ToTerm nested in ToTerm; take structure literally
 
@@ -125,18 +138,22 @@ strategies
     ?ToTerm(t); quoted-trm-explode
 
   quoted-trm-explode =
-    QuotedOp 
+    otf(QuotedOp) 
 
   QuotedOp :
-    op#(ts) -> Op(op, <map(quoted-trm-explode)> ts)
+    t@op#(ts) -> Op(<otf(!op)> t, <map(quoted-trm-explode)> ts)
 
 // regular explode
 
   TrmOp :	
-    op#(ts) -> Op(op, <map(trm-explode)> ts)
+    t@op#(ts) -> Op(<otf(!op)> t, <map(trm-explode)> ts)
 
   TrmMetaVar :
     meta-var(x) -> Var(x)
+
+  TrmMetaVar :
+    c#([x]) -> Var(x)
+  where <string-starts-with(|"StrategoMetaVar")> c
 
   LstMetaVar :
     meta-listvar(x) -> Var(y)
@@ -180,6 +197,12 @@ strategies
     [] -> Op("Nil", [])
 
   TrmCons :
+    [FromTerm(v@Var(ListVar(_)))] -> v
+
+  TrmCons :
+    [mv@meta-listvar(x)] -> <LstMetaVar> mv
+
+  TrmCons :
     [x | xs] -> 
     Op("Cons",[<trm-explode>x, <trm-explode> xs])
 
@@ -221,7 +244,9 @@ strategies
     MangleSuffix(x, y) -> App(Call(SVar("conc-strings"),[]), Tuple([Var(x), Str(y)]))
 
   str-explode =
+    otf(
     \ meta-var(x) -> Match(Var(x)) \
+    <+ \c#([x]) -> Match(Var(x)) where <string-starts-with(|"StrategoMetaVar")> c\
     <+ TrmFromTerm
     <+ TrmFromStr
     <+ ?FromApp(<MetaExplode>)
@@ -229,6 +254,7 @@ strategies
     <+ \ [t | ts] -> Cong("Cons", [<str-explode>t,<str-explode>ts]) \
     <+ is-string; !Match(NoAnnoList(Str(<id>)))
     <+ \ op#(ts) -> Cong(op, <map(str-explode)> ts) \
+    )
 
 signature
   constructors
